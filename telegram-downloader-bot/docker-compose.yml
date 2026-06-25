@@ -1,0 +1,8 @@
+services:
+  bot:
+    build: .
+    container_name: telegram-downloader-bot
+    volumes:
+      - ./downloads:/app/downloads
+    env_file:
+      - .env

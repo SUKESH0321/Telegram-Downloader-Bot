@@ -1,0 +1,13 @@
+In Docker
+→ Start Docker
+
+In terminal
+→ cd to User
+→ wsl -d Ubuntu
+→ cd /mnt/c/Users/Sukesh/Documents/Projects/Telegram_Bot_Project/telegram-downloader-bot
+→ docker compose up --build
+→ use bot
+→ Ctrl+C when done
+
+In Docker
+→ Stop Container
