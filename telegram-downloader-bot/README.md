@@ -1,17 +1,37 @@
-# Telegram Video Downloader Bot
+# Telegram Video & Audio Downloader Bot
 
-A simple Telegram bot that downloads videos/reels from Instagram, TikTok, YouTube Shorts, and other platforms — built with **Python**, **Aiogram 3**, **yt-dlp**, and **Docker**.
+A simple Telegram bot that downloads videos/reels **and audio** from Instagram, TikTok, YouTube Shorts, and other platforms — built with **Python**, **Aiogram 3**, **yt-dlp**, and **Docker**.
 
 ## What We've Built
 
 This project is a working MVP (Minimum Viable Product) that:
 
 1. **Receives a video/reel URL** from a user on Telegram
-2. **Downloads the video** using yt-dlp
-3. **Sends the video file** back to the user
-4. **Cleans up** — deletes the file from the server after sending
+2. **Shows inline buttons** — the user chooses between Video or Audio
+3. **Downloads the media** using yt-dlp (MP4 video or MP3 audio)
+4. **Sends the media file** back to the user
+5. **Cleans up** — deletes the file from the server after sending
 
 No database, no Redis, no rate limiting — just a simple, modular downloader bot.
+
+---
+
+## User Flow
+
+```
+User: /start
+Bot:  "Send me a reel/video link"
+
+User: https://instagram.com/reel/xyz
+Bot:  "Choose format:"
+      [🎬 Video]  [🎵 Audio]
+
+User clicks [🎵 Audio]
+Bot:  "Downloading..." → "Uploading..." → sends MP3 file
+
+User clicks [🎬 Video]  
+Bot:  "Downloading..." → "Uploading..." → sends MP4 file
+```
 
 ---
 
@@ -20,7 +40,7 @@ No database, no Redis, no rate limiting — just a simple, modular downloader bo
 ```
 telegram-downloader-bot/
 │── bot.py              # Telegram bot logic (Aiogram 3.x)
-│── downloader.py       # Video download logic (yt-dlp)
+│── downloader.py       # Video + Audio download logic (yt-dlp)
 │── requirements.txt    # Python dependencies
 │── Dockerfile          # Docker build instructions
 │── docker-compose.yml  # Docker Compose configuration
@@ -35,19 +55,26 @@ telegram-downloader-bot/
 
 ### `bot.py` — Telegram Bot
 
-- Uses **Aiogram 3.x** (`Bot`, `Dispatcher`, `Command` filter)
+- Uses **Aiogram 3.x** (`Bot`, `Dispatcher`, `Command` filter, `CallbackQuery`)
 - **`/start` command** → replies with "Send me a reel/video link"
-- **Message handler** for any text:
+- **Message handler** for any URL:
   - Validates the URL (must start with `http://` or `https://`)
-  - Calls `downloader.download_video(url)` to download
-  - Sends the video back using `reply_video()` with `BufferedInputFile`
-  - Deletes the local file after sending
-  - Sends error messages on failure
+  - Stores the URL temporarily in an in-memory dictionary (`user_urls`)
+  - Shows **inline buttons** with two options: **🎬 Video** and **🎵 Audio**
+- **Callback query handler** for button clicks:
+  - Parses callback data: `dl:{chat_id}:{video|audio}`
+  - **[Security]** Verifies the button clicker matches the original requester
+  - Calls the appropriate download function (`download_video` or `download_audio`)
+  - Sends the file back using `reply_video()` or `reply_audio()` with `BufferedInputFile`
+  - Deletes the local file and status message after sending
+  - Cleans up the stored URL in a `finally` block
 - Simple long-polling setup — no webhooks
 
 ### `downloader.py` — Download Engine
 
-- Single function: `download_video(url: str) -> str | None`
+Two functions for downloading media:
+
+#### `download_video(url: str) -> str | None`
 - Uses **yt-dlp** with these options:
   ```python
   opts = {
@@ -59,7 +86,26 @@ telegram-downloader-bot/
   ```
 - Downloads the best quality video to the `downloads/` folder
 - Handles cases where yt-dlp changes the file extension
-- Returns the file path on success, `None` on failure
+- Returns the MP4/WebM file path on success, `None` on failure
+
+#### `download_audio(url: str) -> str | None`
+- Uses **yt-dlp** with these options:
+  ```python
+  opts = {
+      "format": "bestaudio/best",
+      "outtmpl": "downloads/%(id)s.%(ext)s",
+      "quiet": True,
+      "no_warnings": True,
+      "postprocessors": [{
+          "key": "FFmpegExtractAudio",
+          "preferredcodec": "mp3",
+          "preferredquality": "192",
+      }],
+  }
+  ```
+- Downloads the best available audio stream
+- Uses **FFmpeg** to convert it to MP3 (192 kbps)
+- Returns the MP3 file path on success, `None` on failure
 
 ### `requirements.txt`
 
@@ -72,7 +118,7 @@ python-dotenv>=1.0.0
 ### `Dockerfile`
 
 - Base image: `python:3.11-slim`
-- Installs **ffmpeg** (required by yt-dlp for some format conversions)
+- Installs **ffmpeg** (required by yt-dlp for audio extraction and some video conversions)
 - Installs Python dependencies from `requirements.txt`
 - Copies `bot.py` and `downloader.py` into the container
 - Creates the `downloads/` directory
@@ -121,7 +167,7 @@ Replace `your_telegram_bot_token` with your actual bot token from [@BotFather](h
 
 4. **Open Telegram**, find your bot, and send `/start`
 
-5. **Send a video/reel URL** — the bot will download it and send it back!
+5. **Send a video/reel URL** — choose **🎬 Video** or **🎵 Audio** from the inline buttons!
 
 ---
 
@@ -130,6 +176,7 @@ Replace `your_telegram_bot_token` with your actual bot token from [@BotFather](h
 - **Instagram Reels**
 - **TikTok videos**
 - **YouTube Shorts**
+- **YouTube videos** (including audio-only extraction for music)
 - Any other platform supported by [yt-dlp](https://github.com/yt-dlp/yt-dlp)
 
 ---
@@ -137,18 +184,19 @@ Replace `your_telegram_bot_token` with your actual bot token from [@BotFather](h
 ## Design Principles
 
 - **Simple** — no unnecessary complexity
-- **Modular** — bot logic and download logic are separated
-- **Stateless** — no database, no Redis, no persistent state
-- **Clean** — files are deleted after sending
+- **Modular** — bot logic and download logic are separated into their own files
+- **Stateless** — no database, no Redis, no persistent state; URLs stored in-memory only
+- **Secure** — callback data includes the user's chat ID; prevents cross-user download hijacking
+- **Clean** — files are deleted after sending; stored URLs are cleaned up
 - **Containerized** — runs anywhere Docker is available
 
 ---
 
 ## Future Ideas (Not Implemented)
 
-- Support for playlists / multiple videos
-- Audio-only extraction
-- Custom quality selection
+- Playlist / carousel support (multiple videos)
+- Custom quality selection (720p, 1080p, etc.)
 - Rate limiting
 - Advanced logging
-- User analytics
+- User stats / download history
+- Web dashboard
